@@ -2,7 +2,7 @@
 
 **Target Audience**: Software Engineers, AI Platform Developers, and Codebase Maintainers  
 **Document Owner**: AI Engineering & Integration Team  
-**Version**: 1.2.0  
+**Version**: 1.3.0  
 **Last Updated**: 2026-09-27  
 
 ---
@@ -29,9 +29,18 @@ pip install -r requirements.txt
 Run the automated unit test suite using `pytest`:
 
 ```bash
-# Run unit tests with respx HTTP mocking
+# Run full unit test suite (15/15 tests)
 PYTHONPATH=. .venv/bin/pytest tests/ -v
 ```
+
+### 1.3 Starting the Interactive Swagger UI Server
+To test endpoints visually in your browser:
+
+```bash
+# Start FastAPI Swagger server on port 8000
+python3 swagger_server.py
+```
+Open **[http://localhost:8000/docs](http://localhost:8000/docs)** to test Bearer authentication and REST CRUD operations interactively.
 
 ---
 
@@ -41,16 +50,19 @@ PYTHONPATH=. .venv/bin/pytest tests/ -v
 mcp-rest-server/
 ├── server.py                   # FastMCP server entrypoint & @mcp.tool() definitions
 ├── api_client.py               # Async HTTP REST client (httpx) with Auth & Tenacity retries
+├── swagger_server.py           # FastAPI app serving Swagger UI (/docs) & REST CRUD routes
+├── openapi.json                # Exported OpenAPI 3.1.0 specification schema
 ├── config.py                   # Pydantic-settings configuration & stderr logger setup
 ├── models.py                   # Pydantic request/response validation schemas
-├── requirements.txt            # Python dependencies (fastmcp, httpx, tenacity, pydantic)
+├── requirements.txt            # Python dependencies (fastmcp, fastapi, httpx, tenacity)
 ├── Dockerfile                  # Container build instructions
 ├── deploy.sh                   # Local container deployment script
 ├── deploy_cloudrun.sh          # Cloud Run deployment script
 ├── TECHNICAL_DESIGN.md         # Architecture blueprint & sequence diagrams
 ├── PRODUCTION_SUPPORT_GUIDE.md # Operational runbook for SRE/Ops
 └── tests/
-    └── test_api_client.py      # Pytest test suite with respx mocks
+    ├── test_api_client.py      # Pytest test suite for API client and MCP tools
+    └── test_swagger_server.py  # Pytest test suite for Swagger UI and OpenAPI endpoints
 ```
 
 ---
@@ -318,5 +330,6 @@ When modifying or deploying changes:
 - [ ] **Type Annotations**: Ensure all tool parameters have explicit Python types.
 - [ ] **Docstrings**: Verify function docstrings clearly explain tool purpose and arguments.
 - [ ] **No stdout `print()`**: Check that no `print()` statements exist in codebase (use `logger.info()` / `logger.error()`).
-- [ ] **Unit Tests**: Run `PYTHONPATH=. .venv/bin/pytest tests/` and verify all tests pass.
+- [ ] **Unit Tests**: Run `PYTHONPATH=. .venv/bin/pytest tests/` and verify all 15 tests pass.
+- [ ] **OpenAPI Spec**: Regenerate `openapi.json` if routes change (`python3 -c "..." > openapi.json`).
 - [ ] **Git Push**: Commit and push changes to GitHub (`main` branch).

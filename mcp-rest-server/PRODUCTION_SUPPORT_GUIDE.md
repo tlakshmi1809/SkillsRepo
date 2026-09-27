@@ -2,14 +2,14 @@
 
 **Target Audience**: L2/L3 Production Support, SRE, and DevOps Engineering Teams  
 **Document Owner**: AI Platform & Integration Operations  
-**Version**: 1.0.0  
+**Version**: 1.1.0  
 **Last Updated**: 2026-09-27  
 
 ---
 
 ## 1. System Overview & Component Topology
 
-The **FastMCP REST API Integration Server** acts as an operational bridge between AI Agent runtimes (e.g., Antigravity, Claude Desktop, custom MCP orchestrators) and backend HTTPS REST services.
+The **FastMCP REST API Integration Server** acts as an operational bridge between AI Agent runtimes (e.g., Antigravity, Claude Desktop, custom MCP orchestrators) and backend HTTPS REST services. It also includes a standalone **Swagger UI & OpenAPI Specification service (`swagger_server.py`)** for interactive endpoint testing and API schema validation.
 
 ```
 +---------------------+           +------------------------+           +-----------------------+
@@ -19,9 +19,12 @@ The **FastMCP REST API Integration Server** acts as an operational bridge betwee
 |                     | <-------- |  - Tenacity Retries    | <-------- |                       |
 +---------------------+           +------------------------+           +-----------------------+
                                               |
-                                              v (Logs strictly to stderr)
+                                              +-----> [Swagger UI Service (FastAPI / uvicorn)]
+                                              |       http://localhost:8000/docs
+                                              v
                                   +------------------------+
                                   |  Cloud Logging / Syslog|
+                                  |  (Stderr Logs Only)    |
                                   +------------------------+
 ```
 
@@ -54,7 +57,7 @@ All server operations are governed by environment variables loaded at startup vi
 - **Symptom**: MCP tools return `HTTP Error 401: Unauthorized` or `HTTP Error 403: Forbidden`.
 - **Root Cause**: Expired `API_USER_TOKEN`, invalid `AUTH_SCHEME`, or IP firewall blocking the outgoing request.
 - **Remediation Steps**:
-  1. Test credential validity manually via `curl`:
+  1. Test credential validity manually via `curl` or Swagger UI (`http://localhost:8000/docs`):
      ```bash
      curl -v -H "Authorization: Bearer <API_USER_TOKEN>" https://api.yourdomain.com/v1/resources
      ```
@@ -99,15 +102,16 @@ All server operations are governed by environment variables loaded at startup vi
 ## 4. Deployment & Maintenance Procedures
 
 ### 4.1 Local / VM Deployment Verification
-1. Run automated unit test suite:
+1. Run automated unit test suite (All 15 tests must pass):
    ```bash
    cd mcp-rest-server
-   PYTHONPATH=. .venv/bin/pytest tests/
+   PYTHONPATH=. .venv/bin/pytest tests/ -v
    ```
-2. Verify server startup:
+2. Launch Swagger UI Server & test `/docs`:
    ```bash
-   .venv/bin/python3 -c "import server; print(server.mcp.name)"
+   .venv/bin/python3 swagger_server.py
    ```
+   Open `http://localhost:8000/docs` in your browser.
 
 ### 4.2 Docker Deployment Verification
 1. Build & execute container test:
