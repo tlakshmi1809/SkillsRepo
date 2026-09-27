@@ -2,7 +2,7 @@
 
 **Target Audience**: Software Engineers, AI Platform Developers, and Codebase Maintainers  
 **Document Owner**: AI Engineering & Integration Team  
-**Version**: 1.1.0  
+**Version**: 1.2.0  
 **Last Updated**: 2026-09-27  
 
 ---
@@ -88,50 +88,130 @@ async def search_documents(query: str, max_results: int = 5) -> str:
 
 ---
 
-### 3.2 Deep Dive: The Client Delegation Architecture
+### 3.2 Deep Dive: Dynamic Bearer Token Injection
 
-When a tool function in `server.py` invokes `await client.get(endpoint, params=params)`, it delegates **5 core operational responsibilities** to `RESTApiClient` in [`api_client.py`](file:///config/Desktop/Session1/mcp-rest-server/api_client.py):
+#### What does "Injects Authorization Bearer Token Dynamically" mean?
+Instead of hardcoding API keys or passing authentication tokens inside individual tool functions, the server **automatically and dynamically attaches the `Authorization: Bearer <token>` header to every outgoing HTTP request right before it leaves the client**.
 
-```
-+-----------------------------------------------------------------------------------+
-| TOOL LAYER (server.py)                                                            |
-| @mcp.tool() async def search_documents(query, limit):                            |
-|     return await client.get("/documents/search", params={"q": query})              |
-+-----------------------------------------+-----------------------------------------+
-                                          |
-                                          | Delegates 5 Core Functions
-                                          v
-+-----------------------------------------------------------------------------------+
-| CLIENT LAYER (api_client.py -> RESTApiClient)                                     |
-|                                                                                   |
-|  1. URL Normalization   : Merges base URL & path (https://api.com/v1/docs/search)  |
-|  2. Auth Injection      : Injects 'Authorization: Bearer <token>' dynamically     |
-|  3. Tenacity Retries    : Retries 502/503/504/429 with exponential backoff         |
-|  4. Exception Safety    : Traps 4xx/5xx & network drops -> Returns clean error msg |
-|  5. Response Protection : Formats JSON & truncates if > MAX_RESPONSE_CHAR_LIMIT   |
-+-----------------------------------------------------------------------------------+
+This means developers writing MCP tools in `server.py` **never need to write authentication boilerplate or handle secret tokens**.
+
+```text
++--------------------------------------------------------------------------------------------------+
+|                                    DYNAMIC AUTH INJECTION PIPELINE                               |
+|                                                                                                  |
+|  1. [.env File / Secrets]  ---> 2. [config.py]           ---> 3. [api_client.py]                  |
+|     API_USER_TOKEN="secret"     settings.API_USER_TOKEN        _build_auth(headers)              |
+|     AUTH_SCHEME="Bearer"        settings.AUTH_SCHEME           headers["Authorization"] =        |
+|                                                                "Bearer " + self.token            |
+|                                                                                                  |
+|                                                          4. [Outgoing Request]                   |
+|                                                             Authorization: Bearer secret         |
++--------------------------------------------------------------------------------------------------+
 ```
 
-#### 1. URL Normalization & Request Assembly
-- Strips leading slashes and joins the endpoint with `API_BASE_URL` (`https://api.yourdomain.com/v1` + `documents/search`).
-- Assembles default standard headers (`User-Agent: FastMCP-REST-Client/1.0`, `Accept: application/json`, `Content-Type: application/json`).
+---
 
-#### 2. Dynamic Credential & Auth Injection (`_build_auth`)
-- Evaluates `settings.AUTH_SCHEME` (`Bearer`, `Basic`, `Header`, `Query`).
-- Injects credentials directly into HTTP request headers or query strings without exposing secret tokens to tool definitions, LLM prompt text, or stdout logs.
+#### Step-by-Step Junior Developer Walkthrough & Setup Guide
 
-#### 3. Fault Tolerance & Exponential Backoff Retries (`tenacity`)
-- Wraps request execution with `@retry(stop=stop_after_attempt(3), wait=wait_exponential())`.
-- Automatically catches transient status codes (`502`, `503`, `504`, `429`) and network connection drops, retrying with backoff ($0.5\text{s} \rightarrow 1.0\text{s} \rightarrow 2.0\text{s}$) before failing.
+##### Step 1: Configure Credentials in Environment (`.env`)
+In your root project directory, ensure your `.env` file contains your target API credentials:
 
-#### 4. Exception Wrapping & Stdio Safety
-- Catches `httpx.HTTPStatusError` (401, 403, 404, 500) and `httpx.RequestError` (DNS failure, refused connections).
-- Formats errors as clean strings (e.g. `"HTTP Error 401: Unauthorized"`) rather than raising unhandled Python tracebacks.
-- **Critical Requirement**: Prevents process crashes that would terminate the stdio JSON-RPC loop between the MCP server and LLM runtime.
+```ini
+# .env file
+API_BASE_URL=https://api.yourdomain.com/v1
+API_USER_TOKEN=my_super_secret_jwt_or_api_token
+AUTH_SCHEME=Bearer
+AUTH_HEADER_NAME=Authorization
+```
 
-#### 5. Response Sanitization & Token Truncation (`_format_response`)
-- Pretty-prints JSON responses with `indent=2` for model scannability.
-- Enforces `MAX_RESPONSE_CHAR_LIMIT` (default: 10,000 characters). If a REST response is oversized, it appends a truncation notice to protect the model's context window.
+##### Step 2: How `config.py` Reads the Secrets
+At server startup, `config.py` uses `pydantic-settings` to automatically read the `.env` file into a strongly typed `Settings` object:
+
+```python
+# config.py
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    API_BASE_URL: str = "https://httpbin.org"
+    API_USER_TOKEN: str = ""
+    AUTH_SCHEME: str = "Bearer"        # Case-insensitive: 'Bearer', 'Basic', etc.
+    AUTH_HEADER_NAME: str = "Authorization"
+
+settings = Settings()  # Auto-reads .env
+```
+
+##### Step 3: How `api_client.py` Injects the Header Dynamically
+When `RESTApiClient` initializes, it receives the settings. Before executing any request (`GET`, `POST`, `PUT`, `DELETE`), `_build_auth()` constructs the exact HTTP header required by the target API:
+
+```python
+# api_client.py
+class RESTApiClient:
+    def __init__(self, token=None, auth_scheme=None, header_name=None):
+        self.token = token or settings.API_USER_TOKEN
+        self.auth_scheme = (auth_scheme or settings.AUTH_SCHEME).lower()
+        self.header_name = header_name or settings.AUTH_HEADER_NAME
+
+    def _build_auth(self, headers: Dict[str, str], params: Dict[str, Any]) -> None:
+        """Dynamically injects authentication credentials into request headers."""
+        if not self.token:
+            return  # No token configured; skip auth
+
+        if self.auth_scheme == "bearer":
+            # Injects 'Authorization: Bearer <token>'
+            headers[self.header_name] = f"Bearer {self.token}"
+            
+        elif self.auth_scheme == "basic":
+            # Encodes basic auth if scheme is 'Basic'
+            headers[self.header_name] = f"Basic {self.token}"
+            
+        elif self.auth_scheme == "query":
+            # Appends token as query string '?api_key=<token>'
+            params["api_key"] = self.token
+            
+        else:
+            # Custom header injection (e.g. X-API-Key: <token>)
+            headers[self.header_name] = self.token
+```
+
+##### Step 4: How Clean Tool Definitions Benefit (`server.py`)
+Because auth is injected dynamically by the client layer, tool functions in `server.py` stay completely clean and decoupled from secret handling:
+
+```python
+# server.py - CLEAN TOOL DEFINITION (No token logic needed!)
+@mcp.tool()
+async def get_user_profile(user_id: str) -> str:
+    """Fetch user profile by ID."""
+    # Auth is automatically injected under the hood!
+    return await client.get(f"/users/{user_id}")
+```
+
+##### Step 5: Verifying Dynamic Injection in Unit Tests
+You can verify that dynamic Bearer token injection is working using `pytest` and `respx` in `tests/test_api_client.py`:
+
+```python
+# tests/test_api_client.py
+@pytest.mark.asyncio
+@respx.mock
+async def test_api_client_bearer_auth():
+    # 1. Mock external REST endpoint
+    route = respx.get("https://api.test.com/v1/users/123").respond(
+        status_code=200, json={"id": "123", "name": "Alice"}
+    )
+
+    # 2. Initialize client with Bearer scheme
+    client = RESTApiClient(
+        base_url="https://api.test.com/v1",
+        token="secret_bearer_token",
+        auth_scheme="bearer"
+    )
+
+    # 3. Call endpoint
+    response = await client.get("/users/123")
+
+    # 4. Assert header was injected dynamically
+    request = route.calls.last.request
+    assert request.headers["Authorization"] == "Bearer secret_bearer_token"
+```
 
 ---
 
