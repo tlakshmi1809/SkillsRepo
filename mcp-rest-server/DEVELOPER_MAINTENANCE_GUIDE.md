@@ -2,7 +2,7 @@
 
 **Target Audience**: Software Engineers, AI Platform Developers, and Codebase Maintainers  
 **Document Owner**: AI Engineering & Integration Team  
-**Version**: 1.0.0  
+**Version**: 1.1.0  
 **Last Updated**: 2026-09-27  
 
 ---
@@ -88,7 +88,54 @@ async def search_documents(query: str, max_results: int = 5) -> str:
 
 ---
 
-### 3.2 How to Extend Authentication Mechanisms
+### 3.2 Deep Dive: The Client Delegation Architecture
+
+When a tool function in `server.py` invokes `await client.get(endpoint, params=params)`, it delegates **5 core operational responsibilities** to `RESTApiClient` in [`api_client.py`](file:///config/Desktop/Session1/mcp-rest-server/api_client.py):
+
+```
++-----------------------------------------------------------------------------------+
+| TOOL LAYER (server.py)                                                            |
+| @mcp.tool() async def search_documents(query, limit):                            |
+|     return await client.get("/documents/search", params={"q": query})              |
++-----------------------------------------+-----------------------------------------+
+                                          |
+                                          | Delegates 5 Core Functions
+                                          v
++-----------------------------------------------------------------------------------+
+| CLIENT LAYER (api_client.py -> RESTApiClient)                                     |
+|                                                                                   |
+|  1. URL Normalization   : Merges base URL & path (https://api.com/v1/docs/search)  |
+|  2. Auth Injection      : Injects 'Authorization: Bearer <token>' dynamically     |
+|  3. Tenacity Retries    : Retries 502/503/504/429 with exponential backoff         |
+|  4. Exception Safety    : Traps 4xx/5xx & network drops -> Returns clean error msg |
+|  5. Response Protection : Formats JSON & truncates if > MAX_RESPONSE_CHAR_LIMIT   |
++-----------------------------------------------------------------------------------+
+```
+
+#### 1. URL Normalization & Request Assembly
+- Strips leading slashes and joins the endpoint with `API_BASE_URL` (`https://api.yourdomain.com/v1` + `documents/search`).
+- Assembles default standard headers (`User-Agent: FastMCP-REST-Client/1.0`, `Accept: application/json`, `Content-Type: application/json`).
+
+#### 2. Dynamic Credential & Auth Injection (`_build_auth`)
+- Evaluates `settings.AUTH_SCHEME` (`Bearer`, `Basic`, `Header`, `Query`).
+- Injects credentials directly into HTTP request headers or query strings without exposing secret tokens to tool definitions, LLM prompt text, or stdout logs.
+
+#### 3. Fault Tolerance & Exponential Backoff Retries (`tenacity`)
+- Wraps request execution with `@retry(stop=stop_after_attempt(3), wait=wait_exponential())`.
+- Automatically catches transient status codes (`502`, `503`, `504`, `429`) and network connection drops, retrying with backoff ($0.5\text{s} \rightarrow 1.0\text{s} \rightarrow 2.0\text{s}$) before failing.
+
+#### 4. Exception Wrapping & Stdio Safety
+- Catches `httpx.HTTPStatusError` (401, 403, 404, 500) and `httpx.RequestError` (DNS failure, refused connections).
+- Formats errors as clean strings (e.g. `"HTTP Error 401: Unauthorized"`) rather than raising unhandled Python tracebacks.
+- **Critical Requirement**: Prevents process crashes that would terminate the stdio JSON-RPC loop between the MCP server and LLM runtime.
+
+#### 5. Response Sanitization & Token Truncation (`_format_response`)
+- Pretty-prints JSON responses with `indent=2` for model scannability.
+- Enforces `MAX_RESPONSE_CHAR_LIMIT` (default: 10,000 characters). If a REST response is oversized, it appends a truncation notice to protect the model's context window.
+
+---
+
+### 3.3 How to Extend Authentication Mechanisms
 
 Authentication logic is encapsulated inside `RESTApiClient._build_auth()` in [`api_client.py`](file:///config/Desktop/Session1/mcp-rest-server/api_client.py).
 
@@ -122,7 +169,7 @@ def _build_auth(self, headers: Dict[str, str], params: Dict[str, Any]) -> None:
 
 ---
 
-### 3.3 How to Customize Response Transformers
+### 3.4 How to Customize Response Transformers
 
 Response formatting and character truncation are handled in `RESTApiClient._format_response()` in [`api_client.py`](file:///config/Desktop/Session1/mcp-rest-server/api_client.py).
 
