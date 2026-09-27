@@ -1,0 +1,17 @@
+services:
+  mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mcp-rest-server:latest
+    container_name: mcp-rest-server
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - API_BASE_URL=${API_BASE_URL:-https://httpbin.org}
+      - API_USER_TOKEN=${API_USER_TOKEN:-}
+      - AUTH_SCHEME=${AUTH_SCHEME:-Bearer}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    stdin_open: true
+    tty: true

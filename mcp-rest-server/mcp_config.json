@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "rest-api-server": {
+      "command": "python3",
+      "args": [
+        "/config/Desktop/Session1/mcp-rest-server/server.py"
+      ],
+      "env": {
+        "API_BASE_URL": "https://api.example.com/v1",
+        "API_USER_TOKEN": "your_user_token_or_api_key_here",
+        "AUTH_SCHEME": "Bearer",
+        "AUTH_HEADER_NAME": "Authorization"
+      }
+    }
+  }
+}
